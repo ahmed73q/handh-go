@@ -6,7 +6,7 @@ const http = require('http');
 const SYMBOLS_COUNT = 8;
 const MULTIPLIERS = [5, 10, 45, 5, 25, 15, 5, 5];
 const ICONS = ['☘️', '🦐', '🐟', '🌽', '🥩', '🍗', '🍅', '🥕'];
-const NAMES = ['بروكلي', 'روبيان', 'سمك', 'ذره', 'استيك', 'دجاج', 'طماط', 'جزر'];
+const NAMES = ['بروكلي', 'روبيان', 'سمك', 'ذرة', 'استيك', 'دجاج', 'طماط', 'جزر'];
 const WINDOW_SIZE = 29;
 const SMOOTHING = 1.0;
 const DATA_FILE = path.join(__dirname, 'shared_data.json');
@@ -26,6 +26,9 @@ let sharedData = {
     correctPredictions: 0,
     totalPredictions: 0,
 };
+
+// تخزين حالة المستخدمين (مثل انتظار إدخال الشريط)
+const userStates = new Map();
 
 function loadSharedData() {
     if (fs.existsSync(DATA_FILE)) {
@@ -56,6 +59,17 @@ function addResult(symbol) {
     sharedData.totalAll += 1;
     saveSharedData();
     return true;
+}
+
+function addMultipleResults(symbols) {
+    for (const sym of symbols) {
+        if (sym < 0 || sym >= SYMBOLS_COUNT) continue;
+        sharedData.allCounts[sym] += 1;
+        sharedData.recent.push(sym);
+        if (sharedData.recent.length > WINDOW_SIZE) sharedData.recent.shift();
+        sharedData.totalAll += 1;
+    }
+    saveSharedData();
 }
 
 function resetSharedData() {
@@ -99,6 +113,7 @@ function getPredictionKeyboard(topSymbols) {
         callback_data: `pred_${sym}`
     }]);
     buttons.push([{ text: '❌ إجابة خاطئة', callback_data: 'wrong' }]);
+    buttons.push([{ text: '📊 إرسال الشريط', callback_data: 'send_strip' }]);
     return { inline_keyboard: buttons };
 }
 
@@ -143,21 +158,29 @@ async function sendPrediction(chatId) {
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
 }
 
+function parseNumbersFromText(text) {
+    const regex = /[0-7]/g;
+    const matches = text.match(regex);
+    if (!matches) return [];
+    return matches.map(m => parseInt(m, 10));
+}
+
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     const text = `👋 مرحباً بك في بوت توقعات handhm go!
 
 سأعرض لك كل دورة 3 توقعات (أعلى 3 رموز احتمالاً).
-بعد انتهاء الدورة، اضغط على التوقع الصحيح إذا كان ضمن الـ 3،
-أو اضغط "❌ إجابة خاطئة" ثم اختر الأيقونة الصحيحة من القائمة.
+بعد انتهاء الدورة، يمكنك:
+- الضغط على التوقع الصحيح إذا كان ضمن الـ 3.
+- الضغط على "❌ إجابة خاطئة" ثم اختيار الرمز الصحيح من القائمة.
+- الضغط على "📊 إرسال الشريط" لإدخال آخر 29 نتيجة دفعة واحدة (أرسل 29 رقماً من 0 إلى 7).
 
 الأوامر المتاحة:
 /stats - عرض الإحصائيات والاحتمالات الحالية
-/reset - إعادة تعيين البيانات المشتركة
 /help - عرض هذه التعليمات
 
 لنبدأ التوقع الأول:`;
-    await bot.sendMessage(chatId, text);
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
     await sendPrediction(chatId);
 });
 
@@ -171,19 +194,6 @@ bot.onText(/\/stats/, (msg) => {
     bot.sendMessage(chatId, stats, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/reset/, async (msg) => {
-    const chatId = msg.chat.id;
-    const opts = {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: 'نعم', callback_data: 'reset_confirm' }],
-                [{ text: 'لا', callback_data: 'reset_cancel' }],
-            ],
-        },
-    };
-    await bot.sendMessage(chatId, 'هل أنت متأكد من مسح كل البيانات المشتركة؟', opts);
-});
-
 bot.on('callback_query', async (callbackQuery) => {
     const msg = callbackQuery.message;
     const chatId = msg.chat.id;
@@ -191,19 +201,9 @@ bot.on('callback_query', async (callbackQuery) => {
 
     await bot.answerCallbackQuery(callbackQuery.id);
 
-    if (data === 'reset_confirm') {
-        resetSharedData();
-        await bot.editMessageText('✅ تم مسح البيانات المشتركة بنجاح.', {
-            chat_id: chatId,
-            message_id: msg.message_id,
-        });
-        await sendPrediction(chatId);
-        return;
-    } else if (data === 'reset_cancel') {
-        await bot.editMessageText('❌ تم إلغاء عملية المسح.', {
-            chat_id: chatId,
-            message_id: msg.message_id,
-        });
+    if (data === 'send_strip') {
+        userStates.set(chatId, { awaitingStrip: true });
+        await bot.sendMessage(chatId, '📥 الرجاء إرسال 29 رقمًا (0-7) تمثل آخر 29 نتيجة في الشريط، مفصولة بمسافات أو بدون فواصل (مثال: 2 5 1 0 3 7 4 6 ...).');
         return;
     }
 
@@ -238,6 +238,43 @@ bot.on('callback_query', async (callbackQuery) => {
         addResult(symbol);
         await sendPrediction(chatId);
     }
+});
+
+bot.on('message', async (msg) => {
+    if (!msg.text) return;
+    const chatId = msg.chat.id;
+    const text = msg.text.trim();
+
+    // معالجة الأوامر
+    if (text.startsWith('/')) return;
+
+    // التحقق من حالة انتظار الشريط
+    if (userStates.has(chatId) && userStates.get(chatId).awaitingStrip) {
+        const numbers = parseNumbersFromText(text);
+        if (numbers.length === 29) {
+            addMultipleResults(numbers);
+            userStates.delete(chatId);
+            await bot.sendMessage(chatId, `✅ تم تسجيل ${numbers.length} نتيجة بنجاح. تم تحديث البيانات.`);
+            const stats = getStatsText();
+            await bot.sendMessage(chatId, stats, { parse_mode: 'Markdown' });
+            await sendPrediction(chatId);
+        } else {
+            await bot.sendMessage(chatId, `❌ العدد غير صحيح. يجب أن ترسل 29 رقماً بالضبط. لقد أرسلت ${numbers.length}. حاول مرة أخرى:`);
+        }
+        return;
+    }
+
+    // إذا كانت رسالة عادية تحتوي على عدة أرقام (تسجيل دفعة واحدة بدون انتظار الشريط)
+    const numbers = parseNumbersFromText(text);
+    if (numbers.length > 1) {
+        addMultipleResults(numbers);
+        await bot.sendMessage(chatId, `✅ تم تسجيل ${numbers.length} نتيجة بنجاح.`);
+        const stats = getStatsText();
+        await bot.sendMessage(chatId, stats, { parse_mode: 'Markdown' });
+        await sendPrediction(chatId);
+    }
+    // إذا كان رقماً واحداً فقط، يمكننا تجاهله أو اعتباره خطأ (لأن المستخدم قد يضغط على الأزرار)
+    // لكن الأفضل عدم فعل شيء لتجنب الالتباس.
 });
 
 const PORT = process.env.PORT || 10000;
