@@ -6,7 +6,7 @@ const http = require('http');
 const SYMBOLS_COUNT = 8;
 const MULTIPLIERS = [5, 10, 45, 5, 25, 15, 5, 5];
 const ICONS = ['☘️', '🦐', '🐟', '🌽', '🥩', '🍗', '🍅', '🥕'];
-const NAMES = ['بروكلي', 'روبيان', 'سمك', 'ذرة', 'استيك', 'دجاج', 'طماط', 'جزر'];
+const NAMES = ['خضار', 'روبيان', 'سمك', 'خضار', 'استيك', 'دجاج', 'خضار', 'خضار'];
 const WINDOW_SIZE = 29;
 const SMOOTHING = 1.0;
 const DATA_FILE = path.join(__dirname, 'shared_data.json');
@@ -27,7 +27,6 @@ let sharedData = {
     totalPredictions: 0,
 };
 
-// تخزين حالة المستخدمين (مثل انتظار إدخال الشريط)
 const userStates = new Map();
 
 function loadSharedData() {
@@ -151,6 +150,14 @@ function getStatsText() {
     return lines.join('\n');
 }
 
+function getSymbolsGuide() {
+    let guide = '🔢 *الأرقام المخصصة لكل رمز:*\n';
+    for (let i = 0; i < SYMBOLS_COUNT; i++) {
+        guide += `${i} : ${ICONS[i]} ${NAMES[i]} (${MULTIPLIERS[i]}x)\n`;
+    }
+    return guide;
+}
+
 async function sendPrediction(chatId) {
     const topSymbols = getTop3Symbols();
     const keyboard = getPredictionKeyboard(topSymbols);
@@ -167,7 +174,10 @@ function parseNumbersFromText(text) {
 
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
+    const guide = getSymbolsGuide();
     const text = `👋 مرحباً بك في بوت توقعات handhm go!
+
+${guide}
 
 سأعرض لك كل دورة 3 توقعات (أعلى 3 رموز احتمالاً).
 بعد انتهاء الدورة، يمكنك:
@@ -184,8 +194,20 @@ bot.onText(/\/start/, async (msg) => {
     await sendPrediction(chatId);
 });
 
-bot.onText(/\/help/, (msg) => {
-    bot.sendMessage(msg.chat.id, '👋 أرسل /start للبدء');
+bot.onText(/\/help/, async (msg) => {
+    const chatId = msg.chat.id;
+    const guide = getSymbolsGuide();
+    const text = `👋 *مساعدة البوت*
+
+${guide}
+
+يمكنك التفاعل عبر الأزرار الموجودة في رسالة التوقع.
+الأوامر النصية:
+/stats - عرض الإحصائيات الحالية
+/start - إعادة تشغيل البوت
+
+عند الضغط على "📊 إرسال الشريط"، أرسل 29 رقماً (0-7) متتالية أو مفصولة بمسافات.`;
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/stats/, (msg) => {
@@ -245,10 +267,8 @@ bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text.trim();
 
-    // معالجة الأوامر
     if (text.startsWith('/')) return;
 
-    // التحقق من حالة انتظار الشريط
     if (userStates.has(chatId) && userStates.get(chatId).awaitingStrip) {
         const numbers = parseNumbersFromText(text);
         if (numbers.length === 29) {
@@ -264,7 +284,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // إذا كانت رسالة عادية تحتوي على عدة أرقام (تسجيل دفعة واحدة بدون انتظار الشريط)
     const numbers = parseNumbersFromText(text);
     if (numbers.length > 1) {
         addMultipleResults(numbers);
@@ -273,8 +292,6 @@ bot.on('message', async (msg) => {
         await bot.sendMessage(chatId, stats, { parse_mode: 'Markdown' });
         await sendPrediction(chatId);
     }
-    // إذا كان رقماً واحداً فقط، يمكننا تجاهله أو اعتباره خطأ (لأن المستخدم قد يضغط على الأزرار)
-    // لكن الأفضل عدم فعل شيء لتجنب الالتباس.
 });
 
 const PORT = process.env.PORT || 10000;
