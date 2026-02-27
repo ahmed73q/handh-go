@@ -6,7 +6,7 @@ const http = require('http');
 const SYMBOLS_COUNT = 8;
 const MULTIPLIERS = [5, 10, 45, 5, 25, 15, 5, 5];
 const ICONS = ['☘️', '🦐', '🐟', '🌽', '🥩', '🍗', '🍅', '🥕'];
-const NAMES = ['خضار', 'روبيان', 'سمك', 'خضار', 'استيك', 'دجاج', 'خضار', 'خضار'];
+const NAMES = ['بروكلي', 'روبيان', 'سمك', 'ذره', 'استيك', 'دجاج', 'طماط', 'جزر'];
 const WINDOW_SIZE = 29;
 const SMOOTHING = 1.0;
 const DATA_FILE = path.join(__dirname, 'shared_data.json');
@@ -25,6 +25,7 @@ let sharedData = {
     totalAll: 0,
     correctPredictions: 0,
     totalPredictions: 0,
+    transitionCounts: Array(SYMBOLS_COUNT).fill().map(() => Array(SYMBOLS_COUNT).fill(0))
 };
 
 const userStates = new Map();
@@ -38,6 +39,7 @@ function loadSharedData() {
             sharedData.totalAll = data.totalAll || 0;
             sharedData.correctPredictions = data.correctPredictions || 0;
             sharedData.totalPredictions = data.totalPredictions || 0;
+            sharedData.transitionCounts = data.transitionCounts || Array(SYMBOLS_COUNT).fill().map(() => Array(SYMBOLS_COUNT).fill(0));
         } catch (e) {
             console.error('خطأ في قراءة ملف البيانات:', e);
         }
@@ -52,17 +54,35 @@ loadSharedData();
 
 function addResult(symbol) {
     if (symbol < 0 || symbol >= SYMBOLS_COUNT) return false;
+    
+    if (sharedData.recent.length > 0) {
+        const last = sharedData.recent[sharedData.recent.length - 1];
+        sharedData.transitionCounts[last][symbol] += 1;
+    }
+    
     sharedData.allCounts[symbol] += 1;
     sharedData.recent.push(symbol);
-    if (sharedData.recent.length > WINDOW_SIZE) sharedData.recent.shift();
+    if (sharedData.recent.length > WINDOW_SIZE) {
+        const removed = sharedData.recent.shift();
+    }
     sharedData.totalAll += 1;
     saveSharedData();
     return true;
 }
 
 function addMultipleResults(symbols) {
-    for (const sym of symbols) {
+    for (let i = 0; i < symbols.length; i++) {
+        const sym = symbols[i];
         if (sym < 0 || sym >= SYMBOLS_COUNT) continue;
+        
+        if (i > 0) {
+            const prev = symbols[i-1];
+            sharedData.transitionCounts[prev][sym] += 1;
+        } else if (sharedData.recent.length > 0) {
+            const prev = sharedData.recent[sharedData.recent.length - 1];
+            sharedData.transitionCounts[prev][sym] += 1;
+        }
+        
         sharedData.allCounts[sym] += 1;
         sharedData.recent.push(sym);
         if (sharedData.recent.length > WINDOW_SIZE) sharedData.recent.shift();
@@ -77,6 +97,7 @@ function resetSharedData() {
     sharedData.totalAll = 0;
     sharedData.correctPredictions = 0;
     sharedData.totalPredictions = 0;
+    sharedData.transitionCounts = Array(SYMBOLS_COUNT).fill().map(() => Array(SYMBOLS_COUNT).fill(0));
     saveSharedData();
 }
 
@@ -99,8 +120,23 @@ function getLocalProbabilities() {
     return smoothed.map(v => v / sum);
 }
 
+function getMarkovProbabilities() {
+    if (sharedData.recent.length === 0) {
+        return getLocalProbabilities();
+    }
+    const last = sharedData.recent[sharedData.recent.length - 1];
+    const row = sharedData.transitionCounts[last];
+    const total = row.reduce((a, b) => a + b, 0);
+    if (total === 0) {
+        return getLocalProbabilities();
+    }
+    const smoothed = row.map(c => c + SMOOTHING);
+    const sum = smoothed.reduce((a, b) => a + b, 0);
+    return smoothed.map(v => v / sum);
+}
+
 function getTop3Symbols() {
-    const probs = getLocalProbabilities();
+    const probs = getMarkovProbabilities();
     const indexed = probs.map((p, i) => ({ symbol: i, prob: p }));
     indexed.sort((a, b) => b.prob - a.prob);
     return indexed.slice(0, 3).map(item => item.symbol);
@@ -130,20 +166,28 @@ function getAllSymbolsKeyboard() {
 function getStatsText() {
     const globalProbs = getGlobalProbabilities();
     const localProbs = getLocalProbabilities();
+    const markovProbs = getMarkovProbabilities();
     const accuracy = sharedData.totalPredictions > 0 ? (sharedData.correctPredictions / sharedData.totalPredictions * 100).toFixed(2) : '0.00';
     let lines = [];
     lines.push('📊 *إحصائيات التعلم*');
     lines.push(`✅ توقعات صحيحة: ${sharedData.correctPredictions}`);
     lines.push(`🔮 إجمالي التوقعات: ${sharedData.totalPredictions}`);
     lines.push(`📈 دقة التوقع: ${accuracy}%\n`);
-    lines.push('🎯 *الاحتمالات الحالية*\n');
+    lines.push('🎯 *الاحتمالات الحالية (ماركوف)*\n');
+    for (let i = 0; i < SYMBOLS_COUNT; i++) {
+        const icon = ICONS[i];
+        const mult = MULTIPLIERS[i];
+        const markovP = (markovProbs[i] * 100).toFixed(2);
+        const count = sharedData.allCounts[i];
+        lines.push(`${icon} \`${mult}x\` | ماركوف: ${markovP}% | مرات: ${count}`);
+    }
+    lines.push('\n📊 *مقارنة مع الاحتمالات العامة والمحلية*\n');
     for (let i = 0; i < SYMBOLS_COUNT; i++) {
         const icon = ICONS[i];
         const mult = MULTIPLIERS[i];
         const globalP = (globalProbs[i] * 100).toFixed(2);
         const localP = (localProbs[i] * 100).toFixed(2);
-        const count = sharedData.allCounts[i];
-        lines.push(`${icon} \`${mult}x\` | عام: ${globalP}% | محلي: ${localP}% | مرات: ${count}`);
+        lines.push(`${icon} \`${mult}x\` | عام: ${globalP}% | محلي: ${localP}%`);
     }
     lines.push(`\n📊 إجمالي الدورات: ${sharedData.totalAll}`);
     lines.push(`🔄 آخر ${sharedData.recent.length} ضربة في الشريط (الحد الأقصى ${WINDOW_SIZE})`);
@@ -161,7 +205,7 @@ function getSymbolsGuide() {
 async function sendPrediction(chatId) {
     const topSymbols = getTop3Symbols();
     const keyboard = getPredictionKeyboard(topSymbols);
-    const text = '🔮 *توقعاتي للدورة القادمة:*\nاختر الرمز الصحيح إذا كان ضمن الـ 3، أو اضغط "إجابة خاطئة" ثم اختر الرمز الصحيح.';
+    const text = '🔮 *توقعاتي للدورة القادمة (باستخدام نموذج ماركوف):*\nاختر الرمز الصحيح إذا كان ضمن الـ 3، أو اضغط "إجابة خاطئة" ثم اختر الرمز الصحيح.';
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
 }
 
@@ -175,11 +219,11 @@ function parseNumbersFromText(text) {
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     const guide = getSymbolsGuide();
-    const text = `👋 مرحباً بك في بوت توقعات handhm go!
+    const text = `👋 مرحباً بك في بوت توقعات handhm go (نسخة ماركوف)!
 
 ${guide}
 
-سأعرض لك كل دورة 3 توقعات (أعلى 3 رموز احتمالاً).
+سأعرض لك كل دورة 3 توقعات بناءً على آخر رمز ظهر (نموذج ماركوف من الدرجة الأولى).
 بعد انتهاء الدورة، يمكنك:
 - الضغط على التوقع الصحيح إذا كان ضمن الـ 3.
 - الضغط على "❌ إجابة خاطئة" ثم اختيار الرمز الصحيح من القائمة.
@@ -201,6 +245,7 @@ bot.onText(/\/help/, async (msg) => {
 
 ${guide}
 
+يعتمد البوت على نموذج ماركوف من الدرجة الأولى (الاعتماد على آخر رمز فقط) لتوقع الرمز القادم.
 يمكنك التفاعل عبر الأزرار الموجودة في رسالة التوقع.
 الأوامر النصية:
 /stats - عرض الإحصائيات الحالية
@@ -302,4 +347,4 @@ http.createServer((req, res) => {
     console.log(`🚀 خادم وهمي يستمع على المنفذ ${PORT}`);
 });
 
-console.log('✅ البوت يعمل...');
+console.log('✅ البوت يعمل بنموذج ماركوف...');
