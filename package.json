@@ -1,0 +1,16 @@
+{
+  "name": "handhm-go-bot",
+  "version": "1.0.0",
+  "description": " handhm go",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "fs-extra": "^11.2.0"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
