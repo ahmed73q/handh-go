@@ -1,11 +1,12 @@
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs-extra');
 const path = require('path');
+const http = require('http');
 
 const SYMBOLS_COUNT = 8;
 const MULTIPLIERS = [5, 10, 45, 5, 25, 15, 5, 5];
 const ICONS = ['☘️', '🦐', '🐟', '🌽', '🥩', '🍗', '🍅', '🥕'];
-const NAMES = ['سلطة', 'روبيان', 'سمك', 'ذره', 'استيك', 'دجاج', 'طماطم', 'جزر'];
+const NAMES = ['بروكلي', 'روبيان', 'سمك', 'ذره', 'استيك', 'دجاج', 'طماط', 'جزر'];
 const WINDOW_SIZE = 29;
 const SMOOTHING = 1.0;
 const DATA_FILE = path.join(__dirname, 'shared_data.json');
@@ -85,11 +86,11 @@ function getLocalProbabilities() {
     return smoothed.map(v => v / sum);
 }
 
-function getTop4Symbols() {
+function getTop3Symbols() {
     const probs = getLocalProbabilities();
     const indexed = probs.map((p, i) => ({ symbol: i, prob: p }));
     indexed.sort((a, b) => b.prob - a.prob);
-    return indexed.slice(0, 4).map(item => item.symbol);
+    return indexed.slice(0, 3).map(item => item.symbol);
 }
 
 function getPredictionKeyboard(topSymbols) {
@@ -136,9 +137,9 @@ function getStatsText() {
 }
 
 async function sendPrediction(chatId) {
-    const topSymbols = getTop4Symbols();
+    const topSymbols = getTop3Symbols();
     const keyboard = getPredictionKeyboard(topSymbols);
-    const text = '🔮 *توقعاتي للدورة القادمة:*\nاختر الرمز الصحيح إذا كان ضمن الـ 4، أو اضغط "إجابة خاطئة" ثم اختر الرمز الصحيح.';
+    const text = '🔮 *توقعاتي للدورة القادمة:*\nاختر الرمز الصحيح إذا كان ضمن الـ 3، أو اضغط "إجابة خاطئة" ثم اختر الرمز الصحيح.';
     await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
 }
 
@@ -146,13 +147,13 @@ bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     const text = `👋 مرحباً بك في بوت توقعات handhm go!
 
-سأعرض لك كل دورة 4 توقعات (أعلى 4 رموز احتمالاً).
-بعد انتهاء الدورة، اضغط على التوقع الصحيح إذا كان ضمن الـ 4،
+سأعرض لك كل دورة 3 توقعات (أعلى 3 رموز احتمالاً).
+بعد انتهاء الدورة، اضغط على التوقع الصحيح إذا كان ضمن الـ 3،
 أو اضغط "❌ إجابة خاطئة" ثم اختر الأيقونة الصحيحة من القائمة.
 
 الأوامر المتاحة:
 /stats - عرض الإحصائيات والاحتمالات الحالية
-/reset - إعادة تعيين بياناتك
+/reset - إعادة تعيين البيانات المشتركة
 /help - عرض هذه التعليمات
 
 لنبدأ التوقع الأول:`;
@@ -237,6 +238,14 @@ bot.on('callback_query', async (callbackQuery) => {
         addResult(symbol);
         await sendPrediction(chatId);
     }
+});
+
+const PORT = process.env.PORT || 10000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is running');
+}).listen(PORT, () => {
+    console.log(`🚀 خادم وهمي يستمع على المنفذ ${PORT}`);
 });
 
 console.log('✅ البوت يعمل...');
